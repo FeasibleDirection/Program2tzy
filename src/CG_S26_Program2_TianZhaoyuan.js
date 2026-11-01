@@ -9,6 +9,8 @@ var cubeBuffer = {};
 
 var orbit = 38, elev = 22, dist = 13.0;
 
+var modelViewMatrix;
+
 window.onload = function init()
 {
     canvas = document.getElementById("gl-canvas");
@@ -62,8 +64,29 @@ function render()
     var projectionMatrix = perspective(50.0, canvas.width / canvas.height, 0.1, 100.0);
     gl.uniformMatrix4fv(uProjectionMatrixLoc, false, flatten(projectionMatrix));
 
-    gl.uniformMatrix4fv(uModelViewMatrixLoc, false, flatten(viewMatrix));
-    gl.uniform4fv(uColorLoc, vec4(0.82, 0.33, 0.24, 1.0));
+    modelViewMatrix = viewMatrix;
+    part(1.4, 0.4, 1.4, vec4(0.30, 0.46, 0.62, 1.0), false);
+
+    modelViewMatrix = mult(viewMatrix, translate(0.0, 0.4, 0.0));
+    part(0.62, 0.80, 0.36, vec4(0.82, 0.33, 0.24, 1.0), false);
+
+    modelViewMatrix = mult(viewMatrix, translate(0.0, 1.2, 0.0));
+    part(0.38, 0.38, 0.38, vec4(0.93, 0.84, 0.70, 1.0), false);
+
+    modelViewMatrix = mult(viewMatrix, translate(1.1, 0.9, 0.0));
+    part(0.17, 0.60, 0.17, vec4(0.26, 0.31, 0.38, 1.0), true);
+}
+
+// the unit cube, scaled and placed. down means the piece hangs below the
+// current origin instead of standing on it.
+function part(w, h, d, color, down)
+{
+    var shift = down ? -0.5 * h : 0.5 * h;
+    var instanceMatrix = mult(translate(0.0, shift, 0.0), scale(w, h, d));
+    var t = mult(modelViewMatrix, instanceMatrix);
+
+    gl.uniformMatrix4fv(uModelViewMatrixLoc, false, flatten(t));
+    gl.uniform4fv(uColorLoc, color);
     gl.drawArrays(gl.TRIANGLES, 0, cubeBuffer.count);
 }
 
