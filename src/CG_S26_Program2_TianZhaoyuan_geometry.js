@@ -1,16 +1,5 @@
 "use strict";
 
-// CG Program 2 - geometry
-// Zhaoyuan Tian, CS 5382/7382 Computer Graphics
-//
-// Plain data only. Nothing in this file touches WebGL. It builds two things:
-//
-//   buildCube()      one unit cube, centred on the origin, with face normals.
-//                    Every part of the robot is this cube with its own
-//                    instance transform.
-//
-
-
 // ---------------------------------------------------------------------------
 // the unit cube
 // ---------------------------------------------------------------------------

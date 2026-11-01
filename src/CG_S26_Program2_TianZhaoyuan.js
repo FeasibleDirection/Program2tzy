@@ -1,18 +1,13 @@
 "use strict";
-
-// Step 02 - a page, a canvas and a WebGL 2 context
-//
-// Nothing is drawn yet. This proves the canvas exists, that the browser gives
-// back a WebGL 2 context, and that clearing works. Depth testing goes on here
-// rather than later, because everything in this project is three dimensional
-// and the far side of a solid must not paint over the near side.
-
 var gl;
 var canvas;
 
 var aPositionLoc;
 var uModelViewMatrixLoc, uProjectionMatrixLoc, uColorLoc;
+
 var cubeBuffer = {};
+
+var orbit = 38, elev = 22, dist = 13.0;
 
 window.onload = function init()
 {
@@ -25,7 +20,6 @@ window.onload = function init()
     gl.clearColor(0.051, 0.067, 0.090, 1.0);
     gl.enable(gl.DEPTH_TEST);
 
-    //gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     var program = initShaders(gl, "vertex-shader", "fragment-shader");
     gl.useProgram(program);
 
@@ -36,7 +30,6 @@ window.onload = function init()
     uProjectionMatrixLoc = gl.getUniformLocation(program, "uProjectionMatrix");
     uColorLoc            = gl.getUniformLocation(program, "uColor");
 
-    // the mesh is built and sent to the GPU once, here, and never again
     var cube = buildCube();
     var buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
@@ -44,15 +37,27 @@ window.onload = function init()
     gl.vertexAttribPointer(aPositionLoc, 4, gl.FLOAT, false, 0, 0);
     cubeBuffer = { count: cube.positions.length };
 
+    linkSlider("sOrbit", "vOrbit", function (v) { orbit = v; }, 0);
+    linkSlider("sElev",  "vElev",  function (v) { elev = v; },  0);
+    linkSlider("sDist",  "vDist",  function (v) { dist = v; },  1);
+
     render();
 };
+
+function cameraEye()
+{
+    var t = (90.0 - elev) * Math.PI / 180.0;
+    var p = orbit * Math.PI / 180.0;
+    return vec3(dist * Math.sin(t) * Math.cos(p),
+                dist * Math.cos(t),
+                dist * Math.sin(t) * Math.sin(p));
+}
 
 function render()
 {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    var eye = vec3(4.0, 3.0, 6.0);
-    var viewMatrix = lookAt(eye, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
+    var viewMatrix = lookAt(cameraEye(), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
 
     var projectionMatrix = perspective(50.0, canvas.width / canvas.height, 0.1, 100.0);
     gl.uniformMatrix4fv(uProjectionMatrixLoc, false, flatten(projectionMatrix));
@@ -62,3 +67,14 @@ function render()
     gl.drawArrays(gl.TRIANGLES, 0, cubeBuffer.count);
 }
 
+function linkSlider(sliderId, labelId, setter, decimals)
+{
+    var s = document.getElementById(sliderId);
+    var out = document.getElementById(labelId);
+    s.oninput = function (event) {
+        var v = Number(event.target.value);
+        setter(v);
+        out.textContent = v.toFixed(decimals);
+        render();
+    };
+}
