@@ -5,6 +5,7 @@ var canvas;
 var aPositionLoc, aNormalLoc;
 var uModelViewMatrixLoc, uProjectionMatrixLoc, uNormalMatrixLoc;
 var uColorLoc, uLightDirLoc, uAmbientLoc, uShininessLoc, uSpecularLoc;
+var uColorHighLoc, uColorSteepLoc, uTintLoc;
 
 var cubeBuffer = {}, terrainBuffer = {};
 
@@ -60,7 +61,11 @@ var COL_HEAD  = vec4(0.93, 0.84, 0.70, 1.0);
 var COL_ARM   = vec4(0.30, 0.46, 0.62, 1.0);
 var COL_LEG   = vec4(0.26, 0.31, 0.38, 1.0);
 var COL_FOOT  = vec4(0.17, 0.19, 0.23, 1.0);
-var COL_GROUND= vec4(0.38, 0.52, 0.33, 1.0);
+var COL_GROUND= vec4(0.26, 0.42, 0.24, 1.0);   // grass in the hollows
+var COL_TOPS  = vec3(0.62, 0.62, 0.40);        // dry grass towards the tops
+var COL_EARTH = vec3(0.40, 0.33, 0.26);        // bare earth on the steep faces
+var GROUND_BAND_LOW  = -1.2;                   // the heights the band runs
+var GROUND_BAND_HIGH =  2.4;                   // between
 
 
 window.onload = function init()
@@ -100,6 +105,9 @@ window.onload = function init()
     uAmbientLoc          = gl.getUniformLocation(program, "uAmbient");
     uShininessLoc        = gl.getUniformLocation(program, "uShininess");
     uSpecularLoc         = gl.getUniformLocation(program, "uSpecular");
+    uColorHighLoc        = gl.getUniformLocation(program, "uColorHigh");
+    uColorSteepLoc       = gl.getUniformLocation(program, "uColorSteep");
+    uTintLoc             = gl.getUniformLocation(program, "uTint");
 
     // Both meshes are built and sent to the GPU once, here. Nothing is
     // downloaded again while the program is running.
@@ -198,6 +206,14 @@ function drawRobot()
 {
     useMesh(cubeBuffer);
 
+    // The height-and-slope tint belongs to the ground. Switching it off here
+    // costs one uniform for the whole figure rather than one per part. The
+    // band is left as 0 to 1 so the shader never divides by zero, even though
+    // the branch it guards is skipped.
+    gl.uniform3fv(uTintLoc, flatten(vec3(0.0, 0.0, 1.0)));
+    gl.uniform1f(uShininessLoc, 28.0);
+    gl.uniform1f(uSpecularLoc, 0.22);
+
     // Where the figure stands in the scene. The ground is not flat, so the
     // height comes from the same heightfield function the landscape is built
     // from, which is what keeps the feet on the surface.
@@ -228,6 +244,17 @@ function drawRobot()
 function drawLandscape()
 {
     useMesh(terrainBuffer);
+
+    // Grass is not glossy. Shininess 3 at strength 0.02 is a sheen faint
+    // enough that it never reads as a highlight, only as the ground not being
+    // perfectly flat paint.
+    gl.uniform1f(uShininessLoc, 3.0);
+    gl.uniform1f(uSpecularLoc, 0.02);
+
+    gl.uniform3fv(uColorHighLoc, flatten(COL_TOPS));
+    gl.uniform3fv(uColorSteepLoc, flatten(COL_EARTH));
+    gl.uniform3fv(uTintLoc,
+                  flatten(vec3(1.0, GROUND_BAND_LOW, GROUND_BAND_HIGH)));
 
     modelViewMatrix = viewMatrix;
     gl.uniformMatrix4fv(uModelViewMatrixLoc, false, flatten(modelViewMatrix));

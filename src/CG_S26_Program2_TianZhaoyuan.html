@@ -84,6 +84,14 @@ uniform mat3 uNormalMatrix;
 out vec3 vNormal;
 out vec3 vEye;
 
+// The landscape already knows two things the fragment shader was throwing
+// away: how high each point is, and how far it faces up. It is the only mesh
+// drawn with no model transform of its own - its model-view matrix IS the view
+// matrix - so for that mesh these are already the world height and the world
+// upwardness, with no extra matrix needed.
+out float vHeight;
+out float vUp;
+
 void main()
 {
     vec4 eyePos = uModelViewMatrix * aPosition;
@@ -97,6 +105,9 @@ void main()
     // the surface to the eye is just the negated eye-space position
     vEye = -eyePos.xyz;
 
+    vHeight = aPosition.y;
+    vUp     = aNormal.y;
+
     gl_Position = uProjectionMatrix * eyePos;
 }
 </script>
@@ -108,8 +119,14 @@ precision mediump float;
 
 in vec3 vNormal;
 in vec3 vEye;
+in float vHeight;
+in float vUp;
 
 uniform vec4 uColor;
+uniform vec3 uColorHigh;    // what the surface becomes at the top of the band
+uniform vec3 uColorSteep;   // what a face becomes once it stops facing up
+uniform vec3 uTint;         // x: 1 to use the two above, 0 to ignore them
+                            // y, z: the heights the band runs between
 uniform vec3 uLightDir;     // direction toward the sun, in eye coordinates
 uniform float uAmbient;
 uniform float uShininess;
@@ -133,7 +150,26 @@ void main()
     float spec = pow(max(dot(n, h), 0.0), uShininess) * uSpecular;
     if (diffuse <= 0.0) spec = 0.0;
 
-    vec3 base = uColor.rgb * (uAmbient + (1.0 - uAmbient) * diffuse);
+    vec3 albedo = uColor.rgb;
+
+    // Grass sits in the hollows, dries out towards the tops, and cannot hold
+    // at all on a face too steep to be facing up, where bare earth shows
+    // through. The steep mix goes last, so a steep face high up comes out as
+    // earth rather than as pale grass - which is the way round a hillside
+    // actually looks. uTint.x is 0 for every other surface, so the branch is
+    // skipped and nothing else in the program is affected.
+    if (uTint.x > 0.5) {
+        float high = clamp((vHeight - uTint.y) / (uTint.z - uTint.y), 0.0, 1.0);
+
+        // how far this face has tipped away from facing straight up
+        float tip   = 1.0 - clamp(vUp, 0.0, 1.0);
+        float steep = clamp((tip - 0.15) / 0.45, 0.0, 1.0);
+
+        albedo = mix(albedo, uColorHigh, high);
+        albedo = mix(albedo, uColorSteep, steep);
+    }
+
+    vec3 base = albedo * (uAmbient + (1.0 - uAmbient) * diffuse);
     fColor = vec4(base + vec3(spec), 1.0);
 }
 </script>
