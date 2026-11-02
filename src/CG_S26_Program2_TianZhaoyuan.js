@@ -7,7 +7,7 @@ var uModelViewMatrixLoc, uProjectionMatrixLoc, uNormalMatrixLoc;
 var uColorLoc, uLightDirLoc, uAmbientLoc, uShininessLoc, uSpecularLoc;
 var uColorHighLoc, uColorSteepLoc, uTintLoc;
 
-var cubeBuffer = {}, terrainBuffer = {};
+var cubeBuffer = {}, terrainBuffer = {}, skyBuffer = {}, plainBuffer = {};
 
 var modelViewMatrix;        // the current transformation matrix
 var viewMatrix;             // camera only, the base every object starts from
@@ -67,6 +67,21 @@ var COL_EARTH = vec3(0.40, 0.33, 0.26);        // bare earth on the steep faces
 var GROUND_BAND_LOW  = -1.2;                   // the heights the band runs
 var GROUND_BAND_HIGH =  2.4;                   // between
 
+// The sky is not a surface the sun shines on, so it is drawn at full ambient -
+// which makes uAmbient + (1 - uAmbient) * diffuse collapse to 1 and the
+// shading disappear - and takes its variation from height instead: paler along
+// the horizon, deeper overhead.
+var COL_SKY      = vec4(0.33, 0.36, 0.42, 1.0);
+var COL_SKY_HIGH = vec3(0.06, 0.09, 0.17);
+
+// The land beyond the patch. Lit like any other ground, and its normal points
+// straight up, so the sun strikes it at exactly the angle it strikes the flat
+// parts of the landscape and the two agree at the join without being told to.
+// Its ambient is higher than the landscape's: the landscape wants a deep
+// shadow side, because that is what makes hills read as hills, while the plain
+// is flat and has no relief to lose by being lifted.
+var COL_PLAIN = vec4(0.24, 0.29, 0.22, 1.0);
+
 
 window.onload = function init()
 {
@@ -113,6 +128,8 @@ window.onload = function init()
     // downloaded again while the program is running.
     cubeBuffer    = makeBuffers(buildCube());
     terrainBuffer = makeBuffers(buildTerrain());
+    skyBuffer     = makeBuffers(buildDome(SKY_RADIUS, SKY_BASE, SKY_RINGS, SKY_SEGS));
+    plainBuffer   = makeBuffers(buildPlain(SKY_RADIUS, SKY_BASE, SKY_SEGS));
 
     hookUpControls();
 
@@ -211,6 +228,7 @@ function drawRobot()
     // band is left as 0 to 1 so the shader never divides by zero, even though
     // the branch it guards is skipped.
     gl.uniform3fv(uTintLoc, flatten(vec3(0.0, 0.0, 1.0)));
+    gl.uniform1f(uAmbientLoc, 0.30);
     gl.uniform1f(uShininessLoc, 28.0);
     gl.uniform1f(uSpecularLoc, 0.22);
 
@@ -241,6 +259,45 @@ function drawRobot()
     leg(-TORSO_W * 0.26, joint.rHip, joint.rKn);
 }
 
+// Inside the dome, looking out at its own inner surface. Full ambient, so
+// nothing on it is shaded, and the height tint only - setting 2 on the switch.
+function drawSky()
+{
+    useMesh(skyBuffer);
+
+    gl.uniform1f(uAmbientLoc, 1.0);
+    gl.uniform1f(uShininessLoc, 1.0);
+    gl.uniform1f(uSpecularLoc, 0.0);
+
+    gl.uniform3fv(uColorHighLoc, flatten(COL_SKY_HIGH));
+    gl.uniform3fv(uTintLoc,
+                  flatten(vec3(2.0, SKY_BASE, SKY_BASE + SKY_RADIUS * 0.7)));
+
+    modelViewMatrix = viewMatrix;
+    gl.uniformMatrix4fv(uModelViewMatrixLoc, false, flatten(modelViewMatrix));
+    gl.uniformMatrix3fv(uNormalMatrixLoc, false,
+                        flatten(normalMatrix(modelViewMatrix, true)));
+    gl.uniform4fv(uColorLoc, COL_SKY);
+    gl.drawArrays(gl.TRIANGLES, 0, skyBuffer.count);
+}
+
+function drawPlain()
+{
+    useMesh(plainBuffer);
+
+    gl.uniform1f(uAmbientLoc, 0.34);
+    gl.uniform1f(uShininessLoc, 3.0);
+    gl.uniform1f(uSpecularLoc, 0.02);
+    gl.uniform3fv(uTintLoc, flatten(vec3(0.0, 0.0, 1.0)));
+
+    modelViewMatrix = viewMatrix;
+    gl.uniformMatrix4fv(uModelViewMatrixLoc, false, flatten(modelViewMatrix));
+    gl.uniformMatrix3fv(uNormalMatrixLoc, false,
+                        flatten(normalMatrix(modelViewMatrix, true)));
+    gl.uniform4fv(uColorLoc, COL_PLAIN);
+    gl.drawArrays(gl.TRIANGLES, 0, plainBuffer.count);
+}
+
 function drawLandscape()
 {
     useMesh(terrainBuffer);
@@ -248,6 +305,7 @@ function drawLandscape()
     // Grass is not glossy. Shininess 3 at strength 0.02 is a sheen faint
     // enough that it never reads as a highlight, only as the ground not being
     // perfectly flat paint.
+    gl.uniform1f(uAmbientLoc, 0.22);
     gl.uniform1f(uShininessLoc, 3.0);
     gl.uniform1f(uSpecularLoc, 0.02);
 
@@ -321,10 +379,12 @@ function render()
     var sunEye = mult(viewMatrix, sunWorld);
 
     gl.uniform3fv(uLightDirLoc, flatten(vec3(sunEye[0], sunEye[1], sunEye[2])));
-    gl.uniform1f(uAmbientLoc, 0.30);
-    gl.uniform1f(uShininessLoc, 28.0);
-    gl.uniform1f(uSpecularLoc, 0.22);
 
+    // Ambient, shininess and specular used to be set once here, for the whole
+    // frame, which made the grass exactly as glossy as the robot's boots. They
+    // belong to the surface, so each draw now sends its own.
+    drawSky();
+    drawPlain();
     drawLandscape();
     drawRobot();
 }

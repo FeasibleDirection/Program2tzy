@@ -216,3 +216,92 @@ function addSkirt(positions, normals, h, step, half)
         for (var v = 0; v < 6; v++) { positions.push(tri[v]); normals.push(n4); }
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// the environment
+// ---------------------------------------------------------------------------
+// Everything above is a surface we look AT. These two are surfaces we are
+// INSIDE, and that turns two rules round: the triangles have to be wound
+// counter clockwise seen from the MIDDLE of the scene, not from outside it,
+// and the normals have to point INWARD, or the sun lights the face we can
+// never see.
+
+var SKY_RADIUS = 34.0;      // far enough out that the camera is always inside
+var SKY_BASE   = SKIRT_FLOOR;   // the dome springs from the floor the skirt
+                                // reaches down to, so the block of land stands
+                                // ON the plain rather than hovering over it
+var SKY_RINGS  = 12;
+var SKY_SEGS   = 36;
+
+// The top half of a sphere, centred on (0, baseY, 0) and seen from within.
+function buildDome(radius, baseY, rings, segments)
+{
+    var P = [], N = [];                 // the grid, (rings+1) by (segments+1)
+    var ring, seg;
+
+    for (ring = 0; ring <= rings; ring++) {
+        var phi = 0.5 * Math.PI * ring / rings;     // 0 at the horizon
+        var y   = Math.sin(phi);
+        var rr  = Math.cos(phi);
+        P.push([]); N.push([]);
+
+        for (seg = 0; seg <= segments; seg++) {
+            var th = 2.0 * Math.PI * seg / segments;
+            var x = rr * Math.cos(th);
+            var z = rr * Math.sin(th);
+
+            P[ring].push(vec4(radius * x, baseY + radius * y, radius * z, 1.0));
+
+            // a point on a unit sphere IS its own outward normal, so pointing
+            // it the other way round is the whole of turning it inward - it is
+            // already unit length, with nothing to normalize
+            N[ring].push(vec4(-x, -y, -z, 0.0));
+        }
+    }
+
+    var positions = [], normals = [];
+    function put(r, s) { positions.push(P[r][s]); normals.push(N[r][s]); }
+
+    for (ring = 0; ring < rings; ring++) {
+        for (seg = 0; seg < segments; seg++) {
+            put(ring,     seg    );
+            put(ring,     seg + 1);
+            put(ring + 1, seg + 1);
+
+            put(ring,     seg    );
+            put(ring + 1, seg + 1);
+            put(ring + 1, seg    );
+        }
+    }
+
+    // The last band closes on the pole, where every segment is the same point,
+    // so it contributes `segments` triangles of no area. The card discards
+    // them; they are the price of one loop instead of a loop and a fan.
+    return { positions: positions, normals: normals };
+}
+
+// The flat land the block of terrain stands on, out to the foot of the dome.
+// A fan from the middle, wound counter clockwise seen from above so that it
+// faces up, like the top of the landscape it continues.
+function buildPlain(radius, baseY, segments)
+{
+    var positions = [], normals = [];
+    var up  = vec4(0.0, 1.0, 0.0, 0.0);
+    var mid = vec4(0.0, baseY, 0.0, 1.0);
+
+    for (var seg = 0; seg < segments; seg++) {
+        var t0 = 2.0 * Math.PI * seg / segments;
+        var t1 = 2.0 * Math.PI * (seg + 1) / segments;
+
+        var a = vec4(radius * Math.cos(t0), baseY, radius * Math.sin(t0), 1.0);
+        var b = vec4(radius * Math.cos(t1), baseY, radius * Math.sin(t1), 1.0);
+
+        // (middle, next, this) rather than (middle, this, next): taking them
+        // the other way round would face the whole plain downward
+        positions.push(mid, b, a);
+        normals.push(up, up, up);
+    }
+
+    return { positions: positions, normals: normals };
+}

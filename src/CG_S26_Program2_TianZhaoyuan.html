@@ -160,13 +160,18 @@ void main()
     // skipped and nothing else in the program is affected.
     if (uTint.x > 0.5) {
         float high = clamp((vHeight - uTint.y) / (uTint.z - uTint.y), 0.0, 1.0);
-
-        // how far this face has tipped away from facing straight up
-        float tip   = 1.0 - clamp(vUp, 0.0, 1.0);
-        float steep = clamp((tip - 0.15) / 0.45, 0.0, 1.0);
-
         albedo = mix(albedo, uColorHigh, high);
-        albedo = mix(albedo, uColorSteep, steep);
+
+        // The slope test is for ground. Every part of a dome is steep, so
+        // asking the sky about slope would paint the whole of it one colour -
+        // which is why uTint.x is a switch with three settings rather than
+        // two: 0 off, 1 height and slope, 2 height only.
+        if (uTint.x < 1.5) {
+            // how far this face has tipped away from facing straight up
+            float tip   = 1.0 - clamp(vUp, 0.0, 1.0);
+            float steep = clamp((tip - 0.15) / 0.45, 0.0, 1.0);
+            albedo = mix(albedo, uColorSteep, steep);
+        }
     }
 
     vec3 base = albedo * (uAmbient + (1.0 - uAmbient) * diffuse);
