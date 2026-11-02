@@ -29,6 +29,11 @@ var orbit = 38, elev = 22, dist = 13.0;
 
 // ---- sun -------------------------------------------------------------------
 var sunDir = 55, sunElev = 46;
+
+// ---- the walk --------------------------------------------------------------
+var walking = false;
+var walkClock = 0.0;
+var lastFrame = 0;
 // ---- part sizes, in world units --------------------------------------------
 var TORSO_W = 0.62, TORSO_H = 0.80, TORSO_D = 0.36;
 var HEAD_S  = 0.38;
@@ -80,11 +85,13 @@ window.onload = function init()
 
     // Both meshes are built and sent to the GPU once, here. Nothing is
     // downloaded again while the program is running.
-    cubeBuffer    = makeBuffers(buildCube()); //{position: gl.createBuffer(), normal: gl.createBuffer()}
+    cubeBuffer    = makeBuffers(buildCube());
     terrainBuffer = makeBuffers(buildTerrain());
 
     hookUpControls();
-    render();
+
+    lastFrame = 0;
+    requestAnimationFrame(frame);
 };
 
 
@@ -185,11 +192,13 @@ function drawRobot()
     push();
         // torso sits on the hips
         part(TORSO_W, TORSO_H, TORSO_D, COL_TORSO, false);
+
         push();
             modelViewMatrix = mult(modelViewMatrix, translate(0.0, TORSO_H, 0.0));
             modelViewMatrix = mult(modelViewMatrix, rotateY(joint.head));
             part(HEAD_S, HEAD_S, HEAD_S, COL_HEAD, false);
         pop();
+
         arm( (TORSO_W + UARM_W) * 0.5, joint.lSh, joint.lEl);
         arm(-(TORSO_W + UARM_W) * 0.5, joint.rSh, joint.rEl);
     pop();
@@ -210,6 +219,20 @@ function drawLandscape()
     gl.drawArrays(gl.TRIANGLES, 0, terrainBuffer.count);
 }
 
+
+// ---------------------------------------------------------------------------
+// one frame
+// ---------------------------------------------------------------------------
+function frame(now)
+{
+    var dt = lastFrame ? Math.min((now - lastFrame) / 1000.0, 0.05) : 0.0;
+    lastFrame = now;
+
+    if (walking) stepTheWalk(dt);
+
+    render();
+    requestAnimationFrame(frame);
+}
 
 function render()
 {
@@ -251,6 +274,49 @@ function render()
 }
 
 
+// ---------------------------------------------------------------------------
+// the walk: a sequence of animated motions
+// ---------------------------------------------------------------------------
+// Every joint angle becomes a function of one clock. The legs swing out of
+// phase with each other, the arms swing opposite their own leg, and the figure
+// is carried forward along the direction it is facing. Because the ground is a
+// heightfield, walking over a hill lifts the whole figure with it.
+function stepTheWalk(dt)
+{
+    walkClock += dt * 3.4;
+
+    var s = Math.sin(walkClock);
+    var c = Math.cos(walkClock);
+
+    joint.lHip = 26.0 * s;
+    joint.rHip = -26.0 * s;
+    joint.lKn  = 22.0 * Math.max(0.0, -s) + 6.0;
+    joint.rKn  = 22.0 * Math.max(0.0,  s) + 6.0;
+
+    joint.lSh  = -20.0 * s;
+    joint.rSh  =  20.0 * s;
+    joint.lEl  = -28.0 + 10.0 * c;
+    joint.rEl  = -28.0 - 10.0 * c;
+    joint.head = 9.0 * Math.sin(walkClock * 0.5);
+
+    // forward along the facing direction, and turned back at the edge of the map
+    var speed = 1.25 * dt;
+    var rad = facing * Math.PI / 180.0;
+    var nx = figX + speed * Math.sin(rad);
+    var nz = figZ + speed * Math.cos(rad);
+
+    if (Math.abs(nx) > 5.0 || Math.abs(nz) > 5.0) {
+        facing = (facing + 180.0 + 37.0) % 360.0;
+        setSlider("sFace", "vFace", facing, 0);
+    } else {
+        figX = nx; figZ = nz;
+        setSlider("sPosX", "vPosX", figX, 1);
+        setSlider("sPosZ", "vPosZ", figZ, 1);
+    }
+
+    showJointSliders();
+}
+
 function showJointSliders()
 {
     setSlider("sHead", "vHead", joint.head, 0);
@@ -291,11 +357,17 @@ function hookUpControls()
     linkSlider("sSunDir", "vSunDir", function (v) { sunDir = v; },  0);
     linkSlider("sSunEl",  "vSunEl",  function (v) { sunElev = v; }, 0);
 
+    document.getElementById("bWalk").onclick = function () {
+        walking = !walking;
+        this.textContent = walking ? "Stop" : "Walk";
+    };
+
     document.getElementById("bPose").onclick = function () {
+        walking = false;
+        document.getElementById("bWalk").textContent = "Walk";
         joint = { head: 0, lSh: 18, lEl: -25, rSh: -18, rEl: -25,
                   lHip: -14, lKn: 12, rHip: 14, rKn: 12 };
         showJointSliders();
-        render();
     };
 }
 
@@ -307,7 +379,6 @@ function linkSlider(sliderId, labelId, setter, decimals)
         var v = Number(event.target.value);
         setter(v);
         out.textContent = v.toFixed(decimals);
-        render();
     };
 }
 
