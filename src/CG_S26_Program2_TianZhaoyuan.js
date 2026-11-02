@@ -1,5 +1,4 @@
 "use strict";
-
 var gl;
 var canvas;
 
@@ -8,9 +7,48 @@ var uModelViewMatrixLoc, uProjectionMatrixLoc, uNormalMatrixLoc;
 var uColorLoc, uLightDirLoc, uAmbientLoc, uShininessLoc, uSpecularLoc;
 
 var cubeBuffer = {}, terrainBuffer = {};
-var modelViewMatrix, viewMatrix;
 
+var modelViewMatrix;        // the current transformation matrix
+var viewMatrix;             // camera only, the base every object starts from
+var stack = [];
+
+// ---- joints, in degrees ----------------------------------------------------
+var joint = {
+    head: 0,
+    lSh: 18, lEl: -25,
+    rSh: -18, rEl: -25,
+    lHip: -14, lKn: 12,
+    rHip: 14, rKn: 12
+};
+
+// ---- where the figure stands ----------------------------------------------
+var figX = -2.0, figZ = 1.5, facing = 35;
+
+// ---- camera ----------------------------------------------------------------
 var orbit = 38, elev = 22, dist = 13.0;
+
+// ---- sun -------------------------------------------------------------------
+var sunDir = 55, sunElev = 46;
+// ---- part sizes, in world units --------------------------------------------
+var TORSO_W = 0.62, TORSO_H = 0.80, TORSO_D = 0.36;
+var HEAD_S  = 0.38;
+var UARM_W  = 0.17, UARM_L = 0.42, UARM_D = 0.17;
+var LARM_W  = 0.15, LARM_L = 0.38, LARM_D = 0.15;
+var ULEG_W  = 0.21, ULEG_L = 0.46, ULEG_D = 0.21;
+var LLEG_W  = 0.19, LLEG_L = 0.44, LLEG_D = 0.19;
+var FOOT_W  = 0.23, FOOT_H = 0.11, FOOT_D = 0.40;
+
+// how high the hip sits above the ground when the legs are straight
+var HIP_HEIGHT = ULEG_L + LLEG_L + FOOT_H;
+
+// ---- colours ---------------------------------------------------------------
+var COL_TORSO = vec4(0.82, 0.33, 0.24, 1.0);
+var COL_HEAD  = vec4(0.93, 0.84, 0.70, 1.0);
+var COL_ARM   = vec4(0.30, 0.46, 0.62, 1.0);
+var COL_LEG   = vec4(0.26, 0.31, 0.38, 1.0);
+var COL_FOOT  = vec4(0.17, 0.19, 0.23, 1.0);
+var COL_GROUND= vec4(0.38, 0.52, 0.33, 1.0);
+
 
 window.onload = function init()
 {
@@ -40,19 +78,18 @@ window.onload = function init()
     uShininessLoc        = gl.getUniformLocation(program, "uShininess");
     uSpecularLoc         = gl.getUniformLocation(program, "uSpecular");
 
-    cubeBuffer    = makeBuffer(buildCube());
-    terrainBuffer = makeBuffer(buildTerrain());
+    // Both meshes are built and sent to the GPU once, here. Nothing is
+    // downloaded again while the program is running.
+    cubeBuffer    = makeBuffers(buildCube()); //{position: gl.createBuffer(), normal: gl.createBuffer()}
+    terrainBuffer = makeBuffers(buildTerrain());
 
-    linkSlider("sOrbit", "vOrbit", function (v) { orbit = v; }, 0);
-    linkSlider("sElev",  "vElev",  function (v) { elev = v; },  0);
-    linkSlider("sDist",  "vDist",  function (v) { dist = v; },  1);
-
+    hookUpControls();
     render();
 };
 
-// one buffer per mesh, filled once. Nothing is downloaded again while the
-// program runs, which the brief asks for explicitly.
-function makeBuffer(mesh)
+
+// one position buffer and one normal buffer for a mesh, filled once
+function makeBuffers(mesh)
 {
     var pos = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, pos);
@@ -67,58 +104,199 @@ function makeBuffer(mesh)
 
 // vertexAttribPointer records whichever buffer is bound when it is called, so
 // switching meshes means calling it again
-function useMesh(m)
+function useMesh(buffers)
 {
-    gl.bindBuffer(gl.ARRAY_BUFFER, m.position);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.position);
     gl.vertexAttribPointer(aPositionLoc, 4, gl.FLOAT, false, 0, 0);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, m.normal);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.normal);
     gl.vertexAttribPointer(aNormalLoc, 4, gl.FLOAT, false, 0, 0);
 }
 
+
+// ---------------------------------------------------------------------------
+// the matrix stack
+// ---------------------------------------------------------------------------
+function push() { stack.push(modelViewMatrix); }
+function pop()  { modelViewMatrix = stack.pop(); }
+
+// Draw the unit cube as one part of the figure. w, h and d scale it, and the
+// part is placed so that it hangs downward from the current origin when down
+// is true, which is what a limb segment wants: the next joint is then at the
+// far end of it.
 function part(w, h, d, color, down)
 {
     var shift = down ? -0.5 * h : 0.5 * h;
-    var t = mult(modelViewMatrix, mult(translate(0.0, shift, 0.0), scale(w, h, d)));
+    var instanceMatrix = mult(translate(0.0, shift, 0.0), scale(w, h, d));
+    var t = mult(modelViewMatrix, instanceMatrix);
+
     gl.uniformMatrix4fv(uModelViewMatrixLoc, false, flatten(t));
     gl.uniformMatrix3fv(uNormalMatrixLoc, false, flatten(normalMatrix(t, true)));
     gl.uniform4fv(uColorLoc, color);
     gl.drawArrays(gl.TRIANGLES, 0, cubeBuffer.count);
 }
 
+// one arm: shoulder joint, upper arm, elbow joint, lower arm
+function arm(sideX, shoulderAngle, elbowAngle)
+{
+    push();
+        modelViewMatrix = mult(modelViewMatrix, translate(sideX, TORSO_H * 0.40, 0.0));
+        modelViewMatrix = mult(modelViewMatrix, rotateX(shoulderAngle));
+        part(UARM_W, UARM_L, UARM_D, COL_ARM, true);
+
+        modelViewMatrix = mult(modelViewMatrix, translate(0.0, -UARM_L, 0.0));
+        modelViewMatrix = mult(modelViewMatrix, rotateX(elbowAngle));
+        part(LARM_W, LARM_L, LARM_D, COL_ARM, true);
+    pop();
+}
+
+// one leg: hip joint, thigh, knee joint, shin, and a foot on the end
+function leg(sideX, hipAngle, kneeAngle)
+{
+    push();
+        modelViewMatrix = mult(modelViewMatrix, translate(sideX, 0.0, 0.0));
+        modelViewMatrix = mult(modelViewMatrix, rotateX(hipAngle));
+        part(ULEG_W, ULEG_L, ULEG_D, COL_LEG, true);
+
+        modelViewMatrix = mult(modelViewMatrix, translate(0.0, -ULEG_L, 0.0));
+        modelViewMatrix = mult(modelViewMatrix, rotateX(kneeAngle));
+        part(LLEG_W, LLEG_L, LLEG_D, COL_LEG, true);
+
+        modelViewMatrix = mult(modelViewMatrix, translate(0.0, -LLEG_L, 0.0));
+        modelViewMatrix = mult(modelViewMatrix, rotateX(-kneeAngle - hipAngle));
+        modelViewMatrix = mult(modelViewMatrix, translate(0.0, 0.0, FOOT_D * 0.22));
+        part(FOOT_W, FOOT_H, FOOT_D, COL_FOOT, true);
+    pop();
+}
+
+function drawRobot()
+{
+    useMesh(cubeBuffer);
+
+    // Where the figure stands in the scene. The ground is not flat, so the
+    // height comes from the same heightfield function the landscape is built
+    // from, which is what keeps the feet on the surface.
+    var groundY = terrainHeight(figX, figZ);
+
+    modelViewMatrix = mult(viewMatrix, translate(figX, groundY + HIP_HEIGHT, figZ));
+    modelViewMatrix = mult(modelViewMatrix, rotateY(facing));
+
+    // hips are the root of the figure
+    push();
+        // torso sits on the hips
+        part(TORSO_W, TORSO_H, TORSO_D, COL_TORSO, false);
+        push();
+            modelViewMatrix = mult(modelViewMatrix, translate(0.0, TORSO_H, 0.0));
+            modelViewMatrix = mult(modelViewMatrix, rotateY(joint.head));
+            part(HEAD_S, HEAD_S, HEAD_S, COL_HEAD, false);
+        pop();
+        arm( (TORSO_W + UARM_W) * 0.5, joint.lSh, joint.lEl);
+        arm(-(TORSO_W + UARM_W) * 0.5, joint.rSh, joint.rEl);
+    pop();
+
+    leg( TORSO_W * 0.26, joint.lHip, joint.lKn);
+    leg(-TORSO_W * 0.26, joint.rHip, joint.rKn);
+}
+
+function drawLandscape()
+{
+    useMesh(terrainBuffer);
+
+    modelViewMatrix = viewMatrix;
+    gl.uniformMatrix4fv(uModelViewMatrixLoc, false, flatten(modelViewMatrix));
+    gl.uniformMatrix3fv(uNormalMatrixLoc, false,
+                        flatten(normalMatrix(modelViewMatrix, true)));
+    gl.uniform4fv(uColorLoc, COL_GROUND);
+    gl.drawArrays(gl.TRIANGLES, 0, terrainBuffer.count);
+}
+
+
 function render()
 {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
+    // ---- camera ----------------------------------------------------------
+    // Two angles and a distance place the eye, the way the camera was
+    // described in class: one angle around the scene, one above the ground.
     var t = (90.0 - elev) * Math.PI / 180.0;
     var p = orbit * Math.PI / 180.0;
+
     var eye = vec3(dist * Math.sin(t) * Math.cos(p),
                    dist * Math.cos(t),
                    dist * Math.sin(t) * Math.sin(p));
 
     viewMatrix = lookAt(eye, vec3(0.0, 0.6, 0.0), vec3(0.0, 1.0, 0.0));
-    gl.uniformMatrix4fv(uProjectionMatrixLoc, false,
-        flatten(perspective(50.0, canvas.width / canvas.height, 0.1, 100.0)));
 
-    // the sun, given in world coordinates then carried into eye coordinates by
-    // the view matrix so it stays put while the camera moves
-    var sunWorld = vec4(0.45, 0.72, 0.52, 0.0);
+    var projectionMatrix = perspective(50.0, canvas.width / canvas.height, 0.1, 100.0);
+    gl.uniformMatrix4fv(uProjectionMatrixLoc, false, flatten(projectionMatrix));
+
+    // ---- the sun ---------------------------------------------------------
+    // The light is given in world coordinates and then turned into eye
+    // coordinates by the view matrix, so it stays put in the scene while the
+    // camera orbits around it.
+    var st = (90.0 - sunElev) * Math.PI / 180.0;
+    var sp = sunDir * Math.PI / 180.0;
+    var sunWorld = vec4(Math.sin(st) * Math.cos(sp),
+                        Math.cos(st),
+                        Math.sin(st) * Math.sin(sp), 0.0);
     var sunEye = mult(viewMatrix, sunWorld);
+
     gl.uniform3fv(uLightDirLoc, flatten(vec3(sunEye[0], sunEye[1], sunEye[2])));
     gl.uniform1f(uAmbientLoc, 0.30);
     gl.uniform1f(uShininessLoc, 28.0);
     gl.uniform1f(uSpecularLoc, 0.22);
 
-    useMesh(terrainBuffer);
-    modelViewMatrix = viewMatrix;
-    gl.uniformMatrix4fv(uModelViewMatrixLoc, false, flatten(modelViewMatrix));
-    gl.uniformMatrix3fv(uNormalMatrixLoc, false, flatten(normalMatrix(modelViewMatrix, true)));
-    gl.uniform4fv(uColorLoc, vec4(0.38, 0.52, 0.33, 1.0));
-    gl.drawArrays(gl.TRIANGLES, 0, terrainBuffer.count);
+    drawLandscape();
+    drawRobot();
+}
 
-    useMesh(cubeBuffer);
-    modelViewMatrix = mult(viewMatrix, translate(0.0, terrainHeight(0.0, 0.0) + 0.4, 0.0));
-    part(0.62, 0.80, 0.36, vec4(0.82, 0.33, 0.24, 1.0), false);
+
+function showJointSliders()
+{
+    setSlider("sHead", "vHead", joint.head, 0);
+    setSlider("sLSh", "vLSh", joint.lSh, 0);
+    setSlider("sLEl", "vLEl", joint.lEl, 0);
+    setSlider("sRSh", "vRSh", joint.rSh, 0);
+    setSlider("sREl", "vREl", joint.rEl, 0);
+    setSlider("sLHip", "vLHip", joint.lHip, 0);
+    setSlider("sLKn", "vLKn", joint.lKn, 0);
+    setSlider("sRHip", "vRHip", joint.rHip, 0);
+    setSlider("sRKn", "vRKn", joint.rKn, 0);
+}
+
+
+// ---------------------------------------------------------------------------
+// the controls
+// ---------------------------------------------------------------------------
+function hookUpControls()
+{
+    linkSlider("sHead", "vHead", function (v) { joint.head = v; }, 0);
+    linkSlider("sLSh",  "vLSh",  function (v) { joint.lSh  = v; }, 0);
+    linkSlider("sLEl",  "vLEl",  function (v) { joint.lEl  = v; }, 0);
+    linkSlider("sRSh",  "vRSh",  function (v) { joint.rSh  = v; }, 0);
+    linkSlider("sREl",  "vREl",  function (v) { joint.rEl  = v; }, 0);
+    linkSlider("sLHip", "vLHip", function (v) { joint.lHip = v; }, 0);
+    linkSlider("sLKn",  "vLKn",  function (v) { joint.lKn  = v; }, 0);
+    linkSlider("sRHip", "vRHip", function (v) { joint.rHip = v; }, 0);
+    linkSlider("sRKn",  "vRKn",  function (v) { joint.rKn  = v; }, 0);
+
+    linkSlider("sPosX", "vPosX", function (v) { figX = v; },   1);
+    linkSlider("sPosZ", "vPosZ", function (v) { figZ = v; },   1);
+    linkSlider("sFace", "vFace", function (v) { facing = v; }, 0);
+
+    linkSlider("sOrbit", "vOrbit", function (v) { orbit = v; }, 0);
+    linkSlider("sElev",  "vElev",  function (v) { elev = v; },  0);
+    linkSlider("sDist",  "vDist",  function (v) { dist = v; },  1);
+
+    linkSlider("sSunDir", "vSunDir", function (v) { sunDir = v; },  0);
+    linkSlider("sSunEl",  "vSunEl",  function (v) { sunElev = v; }, 0);
+
+    document.getElementById("bPose").onclick = function () {
+        joint = { head: 0, lSh: 18, lEl: -25, rSh: -18, rEl: -25,
+                  lHip: -14, lKn: 12, rHip: 14, rKn: 12 };
+        showJointSliders();
+        render();
+    };
 }
 
 function linkSlider(sliderId, labelId, setter, decimals)
@@ -131,4 +309,10 @@ function linkSlider(sliderId, labelId, setter, decimals)
         out.textContent = v.toFixed(decimals);
         render();
     };
+}
+
+function setSlider(sliderId, labelId, value, decimals)
+{
+    document.getElementById(sliderId).value = value;
+    document.getElementById(labelId).textContent = value.toFixed(decimals);
 }
