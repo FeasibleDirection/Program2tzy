@@ -29,7 +29,13 @@ var orbit = 38, elev = 22, dist = 13.0;
 var CAMERA_CLEARANCE = 0.7;     // how far the eye is kept above the ground
 
 // ---- sun -------------------------------------------------------------------
-var sunDir = 55, sunElev = 46;
+// A highlight only appears where a face's normal happens to bisect the
+// direction to the eye and the direction to the sun, and the figure is made of
+// flat-faced cubes, so there are very few normals to choose from. At 55/46
+// there was no face anywhere near that bisector. A lower sun also rakes across
+// the hills instead of shining down onto them, which is what makes the relief
+// in the landscape readable.
+var sunDir = 75, sunElev = 26;
 var sunMoving = false;
 
 // ---- the walk --------------------------------------------------------------
@@ -67,6 +73,16 @@ window.onload = function init()
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(0.051, 0.067, 0.090, 1.0);
     gl.enable(gl.DEPTH_TEST);
+
+    // Every mesh in this program is wound counter clockwise seen from outside,
+    // so a triangle that comes out clockwise on screen is the back of a
+    // surface and nothing behind it needs it. Throwing those away halves what
+    // the landscape costs, and it is also the only test that catches a mesh
+    // wound the wrong way round - a shader that flips a back-facing normal
+    // will otherwise light it correctly and hide the fault completely.
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
+    gl.frontFace(gl.CCW);
 
     var program = initShaders(gl, "vertex-shader", "fragment-shader");
     gl.useProgram(program);

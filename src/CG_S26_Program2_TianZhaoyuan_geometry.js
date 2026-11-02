@@ -88,6 +88,7 @@ function terrainHeight(x, z)
     var dish = 0.9 * r * r;          // rises towards the edges
 
     return hills + dish;
+    // return dish;
 }
 
 // The normal of the surface at a grid point, from the heights of its four
@@ -119,7 +120,7 @@ function buildTerrain()
     var normals   = [];
 
     var step = TERRAIN_SIZE / TERRAIN_N;
-    var half = 0.5 * TERRAIN_SIZE;
+    var half = 0.5 * TERRAIN_SIZE; //If  change TERRAIN_SIZE to 16 and want the same relative hill shape, change that divisor to TERRAIN_SIZE / 2 as well.
     var i, j;
 
     // heights and normals first, so each is computed once per grid point
@@ -144,17 +145,74 @@ function buildTerrain()
         normals.push(vec4(v[0], v[1], v[2], 0.0));
     }
 
+    // Counter clockwise seen from above, which is what the cube already does
+    // and what gl.CULL_FACE expects. Taking the cross product of the first two
+    // edges of (i,j) -> (i,j+1) -> (i+1,j+1) gives +y, so the front face of
+    // each triangle is its top. Wound the other way round, every triangle in
+    // the landscape faces away from the camera and culling throws the whole
+    // sheet away.
     for (i = 0; i < TERRAIN_N; i++) {
         for (j = 0; j < TERRAIN_N; j++) {
             corner(i,     j    );
-            corner(i + 1, j    );
+            corner(i,     j + 1);
             corner(i + 1, j + 1);
 
             corner(i,     j    );
             corner(i + 1, j + 1);
-            corner(i,     j + 1);
+            corner(i + 1, j    );
         }
     }
 
+    // and a wall round the rim, so the land has a side to show
+    addSkirt(positions, normals, h, step, half);
+
     return { positions: positions, normals: normals };
+}
+
+
+// ---------------------------------------------------------------------------
+// the skirt
+// ---------------------------------------------------------------------------
+// buildTerrain on its own makes a sheet, and a sheet has a top and nothing
+// else, so from a low camera it reads as a flat disc hanging in space. Walking
+// the rim once and dropping a wall from the ground to a floor below the scene
+// turns it into a block of land with a cut edge.
+
+var SKIRT_FLOOR = -3.0;
+
+function addSkirt(positions, normals, h, step, half)
+{
+    // The rim, walked once all the way round, counter clockwise seen from
+    // above. Consecutive entries are always one grid step apart, corners
+    // included, so no piece of the wall is ever degenerate.
+    var loop = [];
+    var k;
+    for (k = 0;         k < TERRAIN_N; k++) loop.push([0, k]);           // x = -half  left edge
+    for (k = 0;         k < TERRAIN_N; k++) loop.push([k, TERRAIN_N]);   // z = +half  , 2. Bottom edge
+    for (k = TERRAIN_N; k > 0;         k--) loop.push([TERRAIN_N, k]);   // x = +half , 3. Right edge
+    for (k = TERRAIN_N; k > 0;         k--) loop.push([k, 0]);           // z = -half  // 4. Top edge
+
+    for (k = 0; k < loop.length; k++) {
+        var a = loop[k];
+        var b = loop[(k + 1) % loop.length];
+
+        var ax = -half + a[0] * step, az = -half + a[1] * step;
+        var bx = -half + b[0] * step, bz = -half + b[1] * step;
+
+        // Which way is out. Turning the walking direction a quarter turn in
+        // the ground plane gives the outward side, and it is the vertex normal
+        // too, so the wall is lit as a vertical face and not as more ground.
+        var n  = normalize(vec3(-(bz - az), 0.0, bx - ax));
+        var n4 = vec4(n[0], n[1], n[2], 0.0);
+
+        var aTop = vec4(ax, h[a[0]][a[1]], az, 1.0);
+        var aBot = vec4(ax, SKIRT_FLOOR,   az, 1.0);
+        var bBot = vec4(bx, SKIRT_FLOOR,   bz, 1.0);
+        var bTop = vec4(bx, h[b[0]][b[1]], bz, 1.0);
+
+        // top, bottom, bottom, top winds the piece counter clockwise seen
+        // from outside
+        var tri = [aTop, aBot, bBot, aTop, bBot, bTop];
+        for (var v = 0; v < 6; v++) { positions.push(tri[v]); normals.push(n4); }
+    }
 }
