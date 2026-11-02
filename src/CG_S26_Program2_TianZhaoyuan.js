@@ -26,9 +26,11 @@ var figX = -2.0, figZ = 1.5, facing = 35;
 
 // ---- camera ----------------------------------------------------------------
 var orbit = 38, elev = 22, dist = 13.0;
+var CAMERA_CLEARANCE = 0.7;     // how far the eye is kept above the ground
 
 // ---- sun -------------------------------------------------------------------
 var sunDir = 55, sunElev = 46;
+var sunMoving = false;
 
 // ---- the walk --------------------------------------------------------------
 var walking = false;
@@ -229,6 +231,10 @@ function frame(now)
     lastFrame = now;
 
     if (walking) stepTheWalk(dt);
+    if (sunMoving) {
+        sunDir = (sunDir + 18.0 * dt) % 360.0;
+        setSlider("sSunDir", "vSunDir", sunDir, 0);
+    }
 
     render();
     requestAnimationFrame(frame);
@@ -247,6 +253,13 @@ function render()
     var eye = vec3(dist * Math.sin(t) * Math.cos(p),
                    dist * Math.cos(t),
                    dist * Math.sin(t) * Math.sin(p));
+
+    // At a low height the orbit would put the eye underneath a hill and the
+    // view would end up inside the ground. Asking the heightfield how high the
+    // land is at the eye's own x and z, and lifting the eye above it, keeps
+    // every camera setting outside the terrain.
+    var underfoot = terrainHeight(eye[0], eye[2]) + CAMERA_CLEARANCE;
+    if (eye[1] < underfoot) eye[1] = underfoot;
 
     viewMatrix = lookAt(eye, vec3(0.0, 0.6, 0.0), vec3(0.0, 1.0, 0.0));
 
@@ -360,6 +373,11 @@ function hookUpControls()
     document.getElementById("bWalk").onclick = function () {
         walking = !walking;
         this.textContent = walking ? "Stop" : "Walk";
+    };
+
+    document.getElementById("bSun").onclick = function () {
+        sunMoving = !sunMoving;
+        this.textContent = sunMoving ? "Hold the sun" : "Move the sun";
     };
 
     document.getElementById("bPose").onclick = function () {
