@@ -175,7 +175,11 @@ void main()
     }
 
     vec3 base = albedo * (uAmbient + (1.0 - uAmbient) * diffuse);
-    fColor = vec4(base + vec3(spec), 1.0);
+    // The alpha has to come from uColor, not be hard-coded. The shadow is the
+    // one thing drawn with blending on, and with alpha pinned at 1.0 SRC_ALPHA
+    // blending reduces to src * 1 + dst * 0 - the shadow replaces the ground
+    // opaquely instead of darkening it, and nothing can accumulate.
+    fColor = vec4(base + vec3(spec), uColor.a);
 }
 </script>
 

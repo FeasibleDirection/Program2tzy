@@ -9,6 +9,8 @@ var uColorHighLoc, uColorSteepLoc, uTintLoc;
 
 var cubeBuffer = {}, terrainBuffer = {}, skyBuffer = {}, plainBuffer = {};
 
+var shadowPass = false;     // true while the figure is being drawn flattened
+var sunWorldDir;            // the direction to the sun, in WORLD coordinates
 var modelViewMatrix;        // the current transformation matrix
 var viewMatrix;             // camera only, the base every object starts from
 var stack = [];
@@ -82,12 +84,18 @@ var COL_SKY_HIGH = vec3(0.06, 0.09, 0.17);
 // is flat and has no relief to lose by being lifted.
 var COL_PLAIN = vec4(0.24, 0.29, 0.22, 1.0);
 
+// Dark, and see-through, so what it falls on still shows under it.
+var COL_SHADOW = vec4(0.05, 0.07, 0.05, 0.42);
+
 
 window.onload = function init()
 {
     canvas = document.getElementById("gl-canvas");
 
-    gl = canvas.getContext('webgl2');
+    // A WebGL context does not come with a stencil buffer unless it is asked
+    // for by name. Leaving this out is a good bug: everything still runs, and
+    // the shadow pass silently has nothing to mask with.
+    gl = canvas.getContext('webgl2', { stencil: true });
     if (!gl) { alert("WebGL 2.0 isn't available"); return; }
 
     gl.viewport(0, 0, canvas.width, canvas.height);
@@ -181,8 +189,16 @@ function part(w, h, d, color, down)
     var t = mult(modelViewMatrix, instanceMatrix);
 
     gl.uniformMatrix4fv(uModelViewMatrixLoc, false, flatten(t));
-    gl.uniformMatrix3fv(uNormalMatrixLoc, false, flatten(normalMatrix(t, true)));
-    gl.uniform4fv(uColorLoc, color);
+
+    // In the shadow pass t has been through a matrix that throws a dimension
+    // away, so it is singular and has no inverse - and uNormalMatrix is the
+    // inverse transpose, which therefore does not exist. Asking for it anyway
+    // fills the shader with infinities and the figure renders as nothing.
+    // Nothing in a shadow is lit, so the identity goes in instead.
+    gl.uniformMatrix3fv(uNormalMatrixLoc, false,
+                        flatten(shadowPass ? mat3() : normalMatrix(t, true)));
+
+    if (!shadowPass) gl.uniform4fv(uColorLoc, color);
     gl.drawArrays(gl.TRIANGLES, 0, cubeBuffer.count);
 }
 
@@ -219,27 +235,22 @@ function leg(sideX, hipAngle, kneeAngle)
     pop();
 }
 
-function drawRobot()
+// Where the figure stands in the scene. The ground is not flat, so the height
+// comes from the same heightfield function the landscape is built from, which
+// is what keeps the feet on the surface. Split out from the traversal so that
+// the same traversal can be run through a different matrix - which is how the
+// shadow works.
+function standFigure(baseMatrix)
 {
-    useMesh(cubeBuffer);
-
-    // The height-and-slope tint belongs to the ground. Switching it off here
-    // costs one uniform for the whole figure rather than one per part. The
-    // band is left as 0 to 1 so the shader never divides by zero, even though
-    // the branch it guards is skipped.
-    gl.uniform3fv(uTintLoc, flatten(vec3(0.0, 0.0, 1.0)));
-    gl.uniform1f(uAmbientLoc, 0.30);
-    gl.uniform1f(uShininessLoc, 28.0);
-    gl.uniform1f(uSpecularLoc, 0.22);
-
-    // Where the figure stands in the scene. The ground is not flat, so the
-    // height comes from the same heightfield function the landscape is built
-    // from, which is what keeps the feet on the surface.
     var groundY = terrainHeight(figX, figZ);
 
-    modelViewMatrix = mult(viewMatrix, translate(figX, groundY + HIP_HEIGHT, figZ));
+    modelViewMatrix = mult(baseMatrix, translate(figX, groundY + HIP_HEIGHT, figZ));
     modelViewMatrix = mult(modelViewMatrix, rotateY(facing));
+}
 
+// The figure itself, drawn from wherever modelViewMatrix already stands.
+function drawFigureParts()
+{
     // hips are the root of the figure
     push();
         // torso sits on the hips
@@ -257,6 +268,93 @@ function drawRobot()
 
     leg( TORSO_W * 0.26, joint.lHip, joint.lKn);
     leg(-TORSO_W * 0.26, joint.rHip, joint.rKn);
+}
+
+function drawRobot()
+{
+    useMesh(cubeBuffer);
+
+    // The height-and-slope tint belongs to the ground. Switching it off here
+    // costs one uniform for the whole figure rather than one per part. The
+    // band is left as 0 to 1 so the shader never divides by zero, even though
+    // the branch it guards is skipped.
+    gl.uniform3fv(uTintLoc, flatten(vec3(0.0, 0.0, 1.0)));
+    gl.uniform1f(uAmbientLoc, 0.30);
+    gl.uniform1f(uShininessLoc, 28.0);
+    gl.uniform1f(uSpecularLoc, 0.22);
+
+    standFigure(viewMatrix);
+    drawFigureParts();
+}
+
+
+// ---------------------------------------------------------------------------
+// the shadow
+// ---------------------------------------------------------------------------
+// The sun is a direction, not a point, so the shadow is a parallel projection
+// of the figure along that direction onto the ground. A point travels along -l
+// until it reaches the plane y = k, which takes t = (p.y - k) / l.y and lands
+// it at p - t*l. Written as a matrix that is three steps: move the plane to
+// the origin, flatten every height to the same height, move it back.
+//
+// The light direction has to be the WORLD one, not the eye-space one. The
+// flattening happens in the world, before the view matrix is applied.
+function shadowProjection(l, k)
+{
+    var flat = mat4();
+    flat[0][1] = -l[0] / l[1];
+    flat[1][1] =  0.0;              // every height becomes the same height
+    flat[2][1] = -l[2] / l[1];
+
+    return mult(translate(0.0, k, 0.0), mult(flat, translate(0.0, -k, 0.0)));
+}
+
+function drawShadow()
+{
+    useMesh(cubeBuffer);
+
+    shadowPass = true;
+
+    // one colour for the whole pass, and nothing lit: ambient 1.0 makes the
+    // shading term collapse to 1
+    gl.uniform4fv(uColorLoc, COL_SHADOW);
+    gl.uniform1f(uAmbientLoc, 1.0);
+    gl.uniform1f(uSpecularLoc, 0.0);
+    gl.uniform3fv(uTintLoc, flatten(vec3(0.0, 0.0, 1.0)));
+
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+    // The figure is twelve separate boxes and their shadows overlap each
+    // other - the torso's falls across the legs', the arms' across the
+    // torso's. Blended one after another, every overlap darkens the ground
+    // again, which shows as bands inside the shadow.
+    //
+    // The stencil buffer is the standard answer: a pixel is let through only
+    // while its stencil value is not 1, and drawing sets it to 1, so the first
+    // box to reach a pixel darkens it and every later one is turned away.
+    gl.enable(gl.STENCIL_TEST);
+    gl.stencilFunc(gl.NOTEQUAL, 1, 0xFF);
+    gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+
+    // A flat patch with no thickness has no business hiding anything behind
+    // it, so it tests against the depth already there but writes none of its
+    // own. Without this the figure is drawn into its own shadow.
+    gl.depthMask(false);
+
+    // The ground is a heightfield, so there is no one plane to cast onto. The
+    // plane under the figure's own feet is right where it matters - at the
+    // contact a viewer actually reads - and drifts where the shadow runs up a
+    // hill some way off.
+    var plane = shadowProjection(sunWorldDir, terrainHeight(figX, figZ) + 0.02);
+    standFigure(mult(viewMatrix, plane));
+    drawFigureParts();
+
+    gl.depthMask(true);
+    gl.disable(gl.STENCIL_TEST);
+    gl.disable(gl.BLEND);
+
+    shadowPass = false;
 }
 
 // Inside the dome, looking out at its own inner surface. Full ambient, so
@@ -343,7 +441,10 @@ function frame(now)
 
 function render()
 {
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    // The stencil has to be cleared every frame alongside the others. Forget
+    // it and the previous frame's mask survives, every pixel still reads 1,
+    // and the shadow never appears again.
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
 
     // ---- camera ----------------------------------------------------------
     // Two angles and a distance place the eye, the way the camera was
@@ -378,6 +479,9 @@ function render()
                         Math.sin(st) * Math.sin(sp), 0.0);
     var sunEye = mult(viewMatrix, sunWorld);
 
+    // the shadow flattens in the world, so it needs the world direction
+    sunWorldDir = vec3(sunWorld[0], sunWorld[1], sunWorld[2]);
+
     gl.uniform3fv(uLightDirLoc, flatten(vec3(sunEye[0], sunEye[1], sunEye[2])));
 
     // Ambient, shininess and specular used to be set once here, for the whole
@@ -386,6 +490,7 @@ function render()
     drawSky();
     drawPlain();
     drawLandscape();
+    drawShadow();       // on the ground, under the figure, and see-through
     drawRobot();
 }
 
